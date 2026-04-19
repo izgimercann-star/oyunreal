@@ -16,6 +16,8 @@ const player = {
 let traffic = [];
 let roadOffset = 0;
 let score = 0;
+let distance = 0;
+let elapsedMs = 0;
 let gameOver = false;
 let spawnTimer = 0;
 let policeCheckActive = false;
@@ -24,11 +26,13 @@ let policeTimerMs = 0;
 
 const settings = {
   playerSpeed: 1,
-  trafficMinSpeed: 2.1,
-  trafficMaxSpeed: 4.2,
-  spawnEveryMs: 1180,
+  trafficMinSpeed: 1.8,
+  trafficMaxSpeed: 3.4,
+  spawnEveryMs: 1600,
+  maxTrafficOnScreen: 4,
   lanePadding: 10,
-  policeTriggerScore: 12,
+  policeTriggerScore: 6,
+  policeTriggerElapsedMs: 18000,
   policeDurationMs: 10000,
 };
 
@@ -36,10 +40,27 @@ function playerX() {
   return player.lane * laneWidth + (laneWidth - player.width) / 2;
 }
 
+function roundedRectPath(x, y, width, height, radius) {
+  const r = Math.max(0, Math.min(radius, Math.min(width, height) / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
 function resetGame() {
   traffic = [];
   roadOffset = 0;
   score = 0;
+  distance = 0;
+  elapsedMs = 0;
   gameOver = false;
   spawnTimer = 0;
   player.lane = 1;
@@ -47,24 +68,29 @@ function resetGame() {
   policeCheckDone = false;
   policeTimerMs = 0;
 
-  statusEl.textContent = "Skor: 0";
+  statusEl.textContent = "Skor: 0 | Mesafe: 0 m";
   statusEl.classList.remove("game-over", "police-check");
   restartBtn.hidden = true;
 }
 
 function spawnTrafficCar() {
+  if (traffic.length >= settings.maxTrafficOnScreen) return;
+
   const lane = Math.floor(Math.random() * laneCount);
   const width = laneWidth * 0.5;
   const height = 92;
 
-  const palette = ["#f97316", "#22c55e", "#60a5fa", "#fb7185", "#facc15"];
+  // Oyuncu şeridinde üst üste spawn'ları azalt
+  if (lane === player.lane && Math.random() < 0.55) return;
+
+  const palette = ["#f97316", "#22c55e", "#60a5fa", "#fb7185", "#facc15", "#a78bfa"];
   const color = palette[Math.floor(Math.random() * palette.length)];
 
   traffic.push({
     lane,
     width,
     height,
-    y: -height,
+    y: -height - Math.random() * 140,
     speed:
       settings.trafficMinSpeed +
       Math.random() * (settings.trafficMaxSpeed - settings.trafficMinSpeed),
@@ -73,25 +99,21 @@ function spawnTrafficCar() {
 }
 
 function drawRoad() {
-  // Şerit dışı alanlar
   ctx.fillStyle = "#4b5563";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Ana asfalt
   ctx.fillStyle = "#1f2937";
   ctx.fillRect(22, 0, canvas.width - 44, canvas.height);
 
-  // Yol kenar çizgileri
   ctx.fillStyle = "#f8fafc";
   ctx.fillRect(22, 0, 4, canvas.height);
   ctx.fillRect(canvas.width - 26, 0, 4, canvas.height);
 
-  // Şerit çizgileri
   ctx.strokeStyle = "#f8fafc";
   ctx.lineWidth = 3;
   ctx.setLineDash([24, 18]);
 
-  roadOffset = (roadOffset + 5) % 42;
+  roadOffset = (roadOffset + 4.5) % 42;
   ctx.lineDashOffset = -roadOffset;
 
   for (let i = 1; i < laneCount; i++) {
@@ -108,30 +130,22 @@ function drawRoad() {
 function drawCar(x, y, width, height, color, isPolice = false) {
   ctx.save();
 
-  // Gövde
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, height, 12);
+  roundedRectPath(x, y, width, height, 12);
   ctx.fill();
 
-  // Cam
   ctx.fillStyle = "#bfdbfe";
-  ctx.beginPath();
-  ctx.roundRect(x + 8, y + 10, width - 16, 24, 8);
+  roundedRectPath(x + 8, y + 10, width - 16, 24, 8);
   ctx.fill();
 
-  // Orta kabin
   ctx.fillStyle = isPolice ? "#dbeafe" : "#e2e8f0";
-  ctx.beginPath();
-  ctx.roundRect(x + 10, y + 40, width - 20, 22, 8);
+  roundedRectPath(x + 10, y + 40, width - 20, 22, 8);
   ctx.fill();
 
-  // Farlar
   ctx.fillStyle = "#fde68a";
   ctx.fillRect(x + 8, y + height - 8, 10, 5);
   ctx.fillRect(x + width - 18, y + height - 8, 10, 5);
 
-  // Tekerlekler
   ctx.fillStyle = "#111827";
   ctx.fillRect(x - 2, y + 16, 6, 22);
   ctx.fillRect(x + width - 4, y + 16, 6, 22);
@@ -139,11 +153,9 @@ function drawCar(x, y, width, height, color, isPolice = false) {
   ctx.fillRect(x + width - 4, y + height - 36, 6, 22);
 
   if (isPolice) {
-    // Polis çizgileri
     ctx.fillStyle = "#1d4ed8";
     ctx.fillRect(x + 7, y + 42, width - 14, 5);
 
-    // Çakar
     ctx.fillStyle = "#ef4444";
     ctx.fillRect(x + width / 2 - 10, y + 4, 8, 5);
     ctx.fillStyle = "#3b82f6";
@@ -170,31 +182,28 @@ function drawPoliceScene() {
   const policeWidth = laneWidth * 0.58;
   const policeHeight = 102;
   const sideX = canvas.width - policeWidth - 10;
-  const sideY = canvas.height * 0.35;
+  const sideY = canvas.height * 0.34;
 
   drawCar(sideX, sideY, policeWidth, policeHeight, "#f8fafc", true);
 
-  // Dubalar (sarı)
   const conesY = canvas.height * 0.48;
   drawCone(canvas.width - 20, conesY);
   drawCone(canvas.width - 44, conesY + 18);
   drawCone(canvas.width - 68, conesY + 36);
 
-  // Kontrol yazısı kutusu
   const remainingSec = Math.ceil((settings.policeDurationMs - policeTimerMs) / 1000);
   const boxText = `Denetleme yapılıyor... ${Math.max(remainingSec, 0)} sn`;
 
   ctx.fillStyle = "rgba(15, 23, 42, 0.78)";
-  ctx.beginPath();
-  ctx.roundRect(38, 220, canvas.width - 76, 74, 12);
+  roundedRectPath(32, 214, canvas.width - 64, 84, 12);
   ctx.fill();
 
   ctx.fillStyle = "#f8fafc";
   ctx.font = "bold 20px Arial";
   ctx.textAlign = "center";
-  ctx.fillText("POLİS KONTROLÜ", canvas.width / 2, 250);
+  ctx.fillText("POLİS KONTROLÜ", canvas.width / 2, 246);
   ctx.font = "16px Arial";
-  ctx.fillText(boxText, canvas.width / 2, 274);
+  ctx.fillText(boxText, canvas.width / 2, 272);
   ctx.textAlign = "start";
 }
 
@@ -207,10 +216,21 @@ function intersects(a, b) {
   );
 }
 
+function shouldStartPoliceCheck() {
+  return (
+    !policeCheckActive &&
+    !policeCheckDone &&
+    (score >= settings.policeTriggerScore || elapsedMs >= settings.policeTriggerElapsedMs)
+  );
+}
+
 function update(deltaMs) {
   if (gameOver) return;
 
-  if (!policeCheckActive && !policeCheckDone && score >= settings.policeTriggerScore) {
+  elapsedMs += deltaMs;
+  distance += 0.012 * deltaMs;
+
+  if (shouldStartPoliceCheck()) {
     policeCheckActive = true;
     policeTimerMs = 0;
     statusEl.textContent = "🚓 Polis çevirdi: Denetleme başlatıldı";
@@ -223,7 +243,7 @@ function update(deltaMs) {
       policeCheckActive = false;
       policeCheckDone = true;
       statusEl.classList.remove("police-check");
-      statusEl.textContent = `✅ Denetleme tamamlandı. Skor: ${score}`;
+      statusEl.textContent = `✅ Denetleme tamamlandı. Skor: ${score} | Mesafe: ${Math.floor(distance)} m`;
     }
     return;
   }
@@ -261,9 +281,10 @@ function update(deltaMs) {
       width: car.width - padding * 2,
       height: car.height,
     };
+
     if (intersects(p, t)) {
       gameOver = true;
-      statusEl.textContent = `💥 Oyun bitti! Skor: ${score}`;
+      statusEl.textContent = `💥 Oyun bitti! Skor: ${score} | Mesafe: ${Math.floor(distance)} m`;
       statusEl.classList.remove("police-check");
       statusEl.classList.add("game-over");
       restartBtn.hidden = false;
@@ -271,7 +292,7 @@ function update(deltaMs) {
     }
   }
 
-  statusEl.textContent = `Skor: ${score}`;
+  statusEl.textContent = `Skor: ${score} | Mesafe: ${Math.floor(distance)} m`;
 }
 
 function draw() {
